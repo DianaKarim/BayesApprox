@@ -1,0 +1,266 @@
+###############################################################################
+######################### Apollo 13 ###########################################
+###############################################################################
+
+
+library(MCMCglmm)
+#load draws from the first paper: 
+
+load("apollo_results_model2_subset_bigsample.RData")
+
+apollo_draws <- apollo_result_flat$beta
+
+
+mean_beta <- apply(apollo_draws, 2, mean)
+cov_beta <- cov(apollo_draws)
+
+
+apollo_varnames <- colnames(apollo_result_flat$beta)
+source("04_ridge.R")
+source("05_lasso.R")
+source("06_horseshoe.R")
+
+Ns <-  100000
+bn <- 10000
+
+system.time(
+temp <- ridge(mean_beta, cov_beta, Nsample = 10, burnin = 1, 
+                          variableNames = apollo_varnames))
+# elapsed time:  687.219 
+system.time(
+res_apollo_lasso <- lasso(mean_beta, cov_beta, Nsample = Ns, burnin = bn, 
+                          variableNames = apollo_varnames))
+# elapsed time: 773.600 
+system.time(
+res_apollo_horseshoe <- horseshoe(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                          variableNames = apollo_varnames))
+
+# elapsed time: 756.029 
+
+
+save(res_apollo_ridge, res_apollo_lasso, res_apollo_horseshoe, file = 'paper2_apollo_results.RData')
+
+load('paper2_apollo_results.RData')
+# Check sample draws
+
+check.samples <- function(x) {
+  beta <- x$beta
+  par(mfrow=c(4,4))
+  sapply(1:ncol(beta), function(i) {
+    plot(beta[,i], type = "l", ylab = paste("stat", i))
+    traceMean <- sapply(1:NROW(beta[,i]), function(j) mean(beta[1:j,i]))
+    lines(traceMean, col = "red")
+  })
+  par(mfrow=c(1,1))
+}
+
+pdf(file = "checksamples_apollo_paper2.pdf")
+check.samples(res_apollo_ridge)
+check.samples(res_apollo_lasso)
+check.samples(res_apollo_horseshoe) 
+dev.off()
+
+# Get results and graphs
+
+get.results <- function(x) {
+  results <- apply(x, 2, function(y) {
+    data.frame(postMode = posterior.mode(y), 
+               lowerCI = quantile(y, 0.025),
+               upperCI = quantile(y, 0.975),
+               lowerCI99 = quantile(y, 0.005),
+               upperCI99 = quantile(y, 0.995))
+  })
+  results <- do.call(rbind, results)
+  results$sig <- apply(results, 1, function(y) {
+    !dplyr::between(0, y[2], y[3])
+  })
+  results$sig99 <- apply(results, 1, function(y) {
+    !dplyr::between(0, y[4], y[5])
+  })
+  results$variable <- 1:nrow(results)
+  results$variableName <- rownames(results)
+  results <- results[,c(8,9,1:7)]
+  rownames(results) <- NULL
+  results
+}
+
+
+# old model from 1 paper: 
+apollo_oldresflat <- get.results(apollo_result_flat$beta)
+apollo_oldresridge <- get.results(apollo_result_ridge$beta)
+apollo_oldreslasso <- get.results(apollo_result_lasso$beta)
+apollo_oldreshorseshoe <- get.results(apollo_result_horseshoe$beta)
+
+# Combine
+apollo_oldresflat$prior <- "flat"
+apollo_oldresridge$prior <- "ridge"
+apollo_oldreslasso$prior <- "lasso"
+apollo_oldreshorseshoe$prior <- "horseshoe"
+apollo_oldres <- rbind(apollo_oldresflat, apollo_oldresridge, apollo_oldreslasso, apollo_oldreshorseshoe)
+apollo_oldres$width <- apollo_oldres$upperCI-apollo_oldres$lowerCI
+apollo_oldres$prior <- factor(apollo_oldres$prior)
+apollo_oldres$prior <- factor(apollo_oldres$prior, levels = c("flat","ridge", "lasso", "horseshoe"))
+
+# Descriptives
+# Significance
+table(apollo_oldres$sig, apollo_oldres$prior)
+table(apollo_oldres$sig99, apollo_oldres$prior)
+
+# New approximation model:
+apollo_resflat <- get.results(apollo_result_flat$beta)
+apollo_resridge <- get.results(res_apollo_ridge$beta)
+apollo_reslasso <- get.results(res_apollo_lasso$beta)
+apollo_reshorseshoe <- get.results(res_apollo_horseshoe$beta)
+
+# Combine
+apollo_resflat$prior <- "flat"
+apollo_resridge$prior <- "ridge"
+apollo_reslasso$prior <- "lasso"
+apollo_reshorseshoe$prior <- "horseshoe"
+apollo_res <- rbind(apollo_resflat, apollo_resridge, apollo_reslasso, apollo_reshorseshoe)
+apollo_res$width <- apollo_res$upperCI-apollo_res$lowerCI
+apollo_res$prior <- factor(apollo_res$prior)
+apollo_res$prior <- factor(apollo_res$prior, levels = c("flat","ridge", "lasso", "horseshoe"))
+
+# Descriptives
+# Significance
+table(apollo_res$sig, apollo_res$prior)
+table(apollo_res$sig99, apollo_res$prior)
+
+
+# Plotting preparations 
+# Determine and label the facets (model 1)
+apollo_res$facet <- c(rep(1, 12), rep(2:8, times = 13))
+apollo_res$facet <- factor(apollo_res$facet)
+apollo_res$facet <- factor(apollo_res$facet, labels = c("Ground to ground", "Air to air", 
+                                          "Ground to CAPCOM", "Air to CAPCOM",
+                                          "CAPCOM to ground", "CAPCOM to air", 
+                                          "ground to FLIGHT", "FLIGHT to ground"))
+
+# Make sure variable is a factor variable
+apollo_res$variable <- factor(apollo_res$variable)
+
+# Plotting variableNames
+apollo_res$variableName <- gsub(".x.tie.air_to_air", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.ground_to_CAPCOM", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.air_to_CAPCOM", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.CAPCOM_to_air", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.CAPCOM_to_ground", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.FLIGHT_to_ground", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.ground_to_FLIGHT", "", apollo_res$variableName)
+apollo_res$variableName <- gsub("tie.", "", apollo_res$variableName)
+apollo_res$variableName <- gsub("inertia", "I", apollo_res$variableName)
+apollo_res$variableName <- gsub("reciprocity", "R", apollo_res$variableName)
+apollo_res$variableName <- gsub("indegree", "ID", apollo_res$variableName)
+apollo_res$variableName <- gsub("outdegree", "OD", apollo_res$variableName)
+apollo_res$variableName <- gsub("CAPCOM", "CC", apollo_res$variableName)
+apollo_res$variableName <- gsub("air", "A", apollo_res$variableName)
+apollo_res$variableName <- gsub("ground", "G", apollo_res$variableName)
+apollo_res$variableName <- gsub("Receiver", "Rec", apollo_res$variableName)
+apollo_res$variableName <- gsub("Receive", "Rec", apollo_res$variableName)
+apollo_res$variableName <- gsub("Sender", "Snd", apollo_res$variableName)
+apollo_res$variableName <- gsub("Send", "Snd", apollo_res$variableName)
+apollo_res$variableName <- gsub("FLIGHT", "F", apollo_res$variableName)
+
+
+apollo_res_part1 <- apollo_res[apollo_res$facet %in% c("Ground to ground", "Air to air", "Ground to CAPCOM", "Air to CAPCOM"),]
+
+pdf(file = paste0("apollo_estimates_paper2_part1", ".pdf"), width = 7.5, height = 0.8*11)
+
+ggplot(apollo_res_part1, aes(x = postMode, y = variable, group = prior)) +
+  geom_errorbar(aes(xmin = lowerCI, xmax = upperCI, col = sig), 
+                width = 0.75, position = "dodge") +
+  geom_point(aes(shape = prior, color = sig), position = ggstance::position_dodgev(height = 0.75)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_x_continuous(name = "Posterior mode") +
+  scale_y_discrete(name = element_blank(), breaks = (apollo_res$variable), 
+                   labels = (apollo_res$variableName), limits = rev) +
+  scale_color_manual(name = "Significance", values = c("darkgrey", "black"), guide = "none") +
+  scale_shape_manual(name = "Prior", labels = c("Flat", "Ridge", "Lasso", "Horsehoe"),
+                     values = c(16, 17, 15, 4)) +
+  facet_wrap(~ facet, scales = "free", ncol = 2) +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.text.y = element_text(angle = 0),
+        text = element_text(size = 12),
+        rect = element_rect(fill = "white"))
+
+dev.off()
+
+
+apollo_res_part2 <- apollo_res[apollo_res$facet %in% c("CAPCOM to ground", "CAPCOM to air", "ground to FLIGHT", "FLIGHT to ground"),]
+pdf(file = paste0("apollo_estimates_paper2_part2", ".pdf"), width = 7.5, height = 0.8*11)
+
+ggplot(apollo_res_part2, aes(x = postMode, y = variable, group = prior)) +
+  geom_errorbar(aes(xmin = lowerCI, xmax = upperCI, col = sig), 
+                width = 0.75, position = "dodge") +
+  geom_point(aes(shape = prior, color = sig), position = ggstance::position_dodgev(height = 0.75)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_x_continuous(name = "Posterior mode") +
+  scale_y_discrete(name = element_blank(), breaks = (apollo_res$variable), 
+                   labels = (apollo_res$variableName), limits = rev) +
+  scale_color_manual(name = "Significance", values = c("darkgrey", "black"), guide = "none") +
+  scale_shape_manual(name = "Prior", labels = c("Flat", "Ridge", "Lasso", "Horsehoe"),
+                     values = c(16, 17, 15, 4)) +
+  facet_wrap(~ facet, scales = "free", ncol = 2) +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.text.y = element_text(angle = 0),
+        text = element_text(size = 12),
+        rect = element_rect(fill = "white"))
+
+dev.off()
+
+
+
+#### Compare the significance 
+compare_sig_apollo <- merge(apollo_res, apollo_oldres, by= c('variable', 'prior'))
+compare_sig_apollo[(compare_sig_apollo$sig.x !=compare_sig_apollo$sig.y),c(2, 3,4) ]
+nrow(compare_sig_apollo[(compare_sig_apollo$sig.x !=compare_sig_apollo$sig.y),c(2, 3,4) ])
+
+
+
+lasso_tab <- compare_sig_apollo[compare_sig_apollo$prior == 'lasso', ]
+ridge_tab <- compare_sig_apollo[compare_sig_apollo$prior == 'ridge', ]
+hs_tab <- compare_sig_apollo[compare_sig_apollo$prior == 'horseshoe', ]
+
+sum(lasso_tab$sig.x != lasso_tab$sig.y)
+sum(ridge_tab$sig.x != ridge_tab$sig.y)
+sum(hs_tab$sig.x != hs_tab$sig.y)
+hs_tab[(hs_tab$sig.x != hs_tab$sig.y),]
+
+
+33/(107*3)
+
+#Prediction scores
+
+source("predictive_performance_functions.R")
+load("apollo_estimation_data2.RData")
+
+apollo_inpred_ridge <- get.insample.pred.draws(res_apollo_ridge$beta, Events_apollo, 
+                                              stats2, M = nrow(Events_apollo)-500)$scores
+
+apollo_inpred_lasso <- get.insample.pred.draws(res_apollo_lasso$beta, Events_apollo, 
+                                               stats2, M = nrow(Events_apollo)-500)$scores
+
+apollo_inpred_horseshoe <- get.insample.pred.draws(res_apollo_horseshoe$beta, Events_apollo, 
+                                               stats2, M = nrow(Events_apollo)-500)$scores
+
+
+
+apollo_outpred_ridge <- get.outofsample.pred(res_apollo_ridge$beta, Events_apollo, 
+                                      stats2, M = nrow(Events_apollo)-500, n = 500)$scores
+
+apollo_outpred_lasso <- get.outofsample.pred(res_apollo_lasso$beta, Events_apollo, 
+                                             stats2, M = nrow(Events_apollo)-500, n = 500)$scores
+
+apollo_outpred_horseshoe <- get.outofsample.pred(res_apollo_horseshoe$beta, Events_apollo, 
+                                             stats2, M = nrow(Events_apollo)-500, n = 500)$scores
+
+
+save(apollo_inpred_ridge, apollo_inpred_lasso, apollo_inpred_horseshoe, 
+     apollo_outpred_ridge, apollo_outpred_lasso, apollo_outpred_horseshoe, 
+     file = "apollo_prediction_perf_paper2.RData")
+
+
+
+
+

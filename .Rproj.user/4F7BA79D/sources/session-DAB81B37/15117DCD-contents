@@ -1,0 +1,225 @@
+###############################################################################
+###### Demonstration of the package usage on Apollo 13 Mission Data      ######
+###############################################################################
+
+# Load the data (results from the initial analysis of multinomial choice model):
+load("/Users/dianakarimova/Desktop/Second paper codes/apollo_results_model2_subset_bigsample.RData")
+
+# Get the MLE estimates and covariance matrix from the no-shrinkage(flat) model
+apollo_draws <- apollo_result_flat$beta
+mean_beta <- apply(apollo_draws, 2, mean)
+cov_beta <- cov(apollo_draws)
+# Remember the names of the effects of the model
+apollo_varnames <- colnames(apollo_result_flat$beta)
+apollo_varnames
+
+
+###############################################################################
+###### 1. Source the necessary functions from the R code                 ######
+###############################################################################
+
+source("/Users/dianakarimova/Desktop/Second paper codes/04_ridge.R")
+source("/Users/dianakarimova/Desktop/Second paper codes/05_lasso.R")
+source("/Users/dianakarimova/Desktop/Second paper codes/06_horseshoe.R")
+
+
+#Ns <-  100000
+#bn <- 10000
+
+Ns <- 1000
+bn <- 100
+system.time(
+  res_apollo_ridge <- ridge(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                variableNames = apollo_varnames))
+# elapsed time:  687.219
+system.time(
+  res_apollo_lasso <- lasso(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                            variableNames = apollo_varnames))
+# elapsed time: 773.600
+system.time(
+  res_apollo_horseshoe <- horseshoe(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                                    variableNames = apollo_varnames))
+# elapsed time: 756.029
+
+
+
+###############################################################################
+###### 2. Load R package                                                 ######
+###############################################################################
+
+library(BApprox)
+?lasso()
+?ridge()
+?horseshoe()
+
+Ns <- 1000
+bn <- 100
+
+system.time(
+  res_apollo_ridge <- ridge(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                            variableNames = apollo_varnames))
+system.time(
+  res_apollo_lasso <- lasso(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                            variableNames = apollo_varnames))
+system.time(
+  res_apollo_horseshoe <- horseshoe(mean_beta, cov_beta, Nsample = Ns, burnin = bn,
+                                    variableNames = apollo_varnames))
+
+###############################################################################
+###### 3. Analyze and visualize the results                              ######
+###############################################################################
+library(MCMCglmm)
+get.results <- function(x) {
+  results <- apply(x, 2, function(y) {
+    data.frame(postMode = posterior.mode(y),
+               lowerCI = quantile(y, 0.025),
+               upperCI = quantile(y, 0.975),
+               lowerCI99 = quantile(y, 0.005),
+               upperCI99 = quantile(y, 0.995))
+  })
+  results <- do.call(rbind, results)
+  results$sig <- apply(results, 1, function(y) {
+    !dplyr::between(0, y[2], y[3])
+  })
+  results$sig99 <- apply(results, 1, function(y) {
+    !dplyr::between(0, y[4], y[5])
+  })
+  results$variable <- 1:nrow(results)
+  results$variableName <- rownames(results)
+  results <- results[,c(8,9,1:7)]
+  rownames(results) <- NULL
+  results
+}
+
+# Load the results with 100K iterations
+load('/Users/dianakarimova/Desktop/Second paper codes/paper2_apollo_results.RData')
+
+# Reshape the results:
+apollo_resflat <- get.results(apollo_result_flat$beta)
+apollo_resridge <- get.results(res_apollo_ridge$beta)
+apollo_reslasso <- get.results(res_apollo_lasso$beta)
+apollo_reshorseshoe <- get.results(res_apollo_horseshoe$beta)
+
+#Combine in one dataframe:
+apollo_resflat$prior <- "flat"
+apollo_resridge$prior <- "ridge"
+apollo_reslasso$prior <- "lasso"
+apollo_reshorseshoe$prior <- "horseshoe"
+apollo_res <- rbind(apollo_resflat, apollo_resridge, apollo_reslasso, apollo_reshorseshoe)
+apollo_res$width <- apollo_res$upperCI-apollo_res$lowerCI
+apollo_res$prior <- factor(apollo_res$prior)
+apollo_res$prior <- factor(apollo_res$prior, levels = c("flat","ridge", "lasso", "horseshoe"))
+
+
+# Check the significance of the effects:
+table(apollo_res$sig, apollo_res$prior)
+table(apollo_res$sig99, apollo_res$prior)
+
+
+# Make a vizualization:
+
+library(ggplot2)
+
+
+# Determine and label the facets (model 1)
+apollo_res$facet <- c(rep(1, 12), rep(2:8, times = 13))
+apollo_res$facet <- factor(apollo_res$facet)
+apollo_res$facet <- factor(apollo_res$facet, labels = c("Ground to ground", "Air to air",
+                                                        "Ground to CAPCOM", "Air to CAPCOM",
+                                                        "CAPCOM to ground", "CAPCOM to air",
+                                                        "ground to FLIGHT", "FLIGHT to ground"))
+
+# Make sure variable is a factor variable
+apollo_res$variable <- factor(apollo_res$variable)
+
+# Plot preparations:
+# Define facets:
+apollo_res$facet <- c(rep(1, 12), rep(2:8, times = 13))
+apollo_res$facet <- factor(apollo_res$facet)
+apollo_res$facet <- factor(apollo_res$facet, labels = c("Ground to ground", "Air to air",
+                                                        "Ground to CAPCOM", "Air to CAPCOM",
+                                                        "CAPCOM to ground", "CAPCOM to air",
+                                                        "ground to FLIGHT", "FLIGHT to ground"))
+
+# Text manipulation for more readable effects names:
+apollo_res$variableName <- gsub(".x.tie.air_to_air", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.ground_to_CAPCOM", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.air_to_CAPCOM", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.CAPCOM_to_air", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.CAPCOM_to_ground", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.FLIGHT_to_ground", "", apollo_res$variableName)
+apollo_res$variableName <- gsub(".x.tie.ground_to_FLIGHT", "", apollo_res$variableName)
+apollo_res$variableName <- gsub("tie.", "", apollo_res$variableName)
+apollo_res$variableName <- gsub("inertia", "I", apollo_res$variableName)
+apollo_res$variableName <- gsub("reciprocity", "R", apollo_res$variableName)
+apollo_res$variableName <- gsub("indegree", "ID", apollo_res$variableName)
+apollo_res$variableName <- gsub("outdegree", "OD", apollo_res$variableName)
+apollo_res$variableName <- gsub("CAPCOM", "CC", apollo_res$variableName)
+apollo_res$variableName <- gsub("air", "A", apollo_res$variableName)
+apollo_res$variableName <- gsub("ground", "G", apollo_res$variableName)
+apollo_res$variableName <- gsub("Receiver", "Rec", apollo_res$variableName)
+apollo_res$variableName <- gsub("Receive", "Rec", apollo_res$variableName)
+apollo_res$variableName <- gsub("Sender", "Snd", apollo_res$variableName)
+apollo_res$variableName <- gsub("Send", "Snd", apollo_res$variableName)
+apollo_res$variableName <- gsub("FLIGHT", "F", apollo_res$variableName)
+
+# The plot is divided into 2 parts for better visibility:
+apollo_res_part1 <- apollo_res[apollo_res$facet %in% c("Ground to ground", "Air to air", "Ground to CAPCOM", "Air to CAPCOM"),]
+
+pdf(file = paste0("apollo_estimates_paper2_part1", ".pdf"), width = 7.5, height = 0.8*11)
+
+ggplot(apollo_res_part1, aes(x = postMode, y = variable, group = prior)) +
+  geom_errorbar(aes(xmin = lowerCI, xmax = upperCI, col = sig),
+                width = 0.75, position = "dodge") +
+  geom_point(aes(shape = prior, color = sig), position = ggstance::position_dodgev(height = 0.75)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_x_continuous(name = "Posterior mode") +
+  scale_y_discrete(name = element_blank(), breaks = (apollo_res$variable),
+                   labels = (apollo_res$variableName), limits = rev) +
+  scale_color_manual(name = "Significance", values = c("darkgrey", "black"), guide = "none") +
+  scale_shape_manual(name = "Prior", labels = c("Flat", "Ridge", "Lasso", "Horsehoe"),
+                     values = c(16, 17, 15, 4)) +
+  facet_wrap(~ facet, scales = "free", ncol = 2) +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.text.y = element_text(angle = 0),
+        text = element_text(size = 12),
+        rect = element_rect(fill = "white"))
+
+dev.off()
+
+
+apollo_res_part2 <- apollo_res[apollo_res$facet %in% c("CAPCOM to ground", "CAPCOM to air", "ground to FLIGHT", "FLIGHT to ground"),]
+pdf(file = paste0("apollo_estimates_paper2_part2", ".pdf"), width = 7.5, height = 0.8*11)
+
+ggplot(apollo_res_part2, aes(x = postMode, y = variable, group = prior)) +
+  geom_errorbar(aes(xmin = lowerCI, xmax = upperCI, col = sig),
+                width = 0.75, position = "dodge") +
+  geom_point(aes(shape = prior, color = sig), position = ggstance::position_dodgev(height = 0.75)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_x_continuous(name = "Posterior mode") +
+  scale_y_discrete(name = element_blank(), breaks = (apollo_res$variable),
+                   labels = (apollo_res$variableName), limits = rev) +
+  scale_color_manual(name = "Significance", values = c("darkgrey", "black"), guide = "none") +
+  scale_shape_manual(name = "Prior", labels = c("Flat", "Ridge", "Lasso", "Horsehoe"),
+                     values = c(16, 17, 15, 4)) +
+  facet_wrap(~ facet, scales = "free", ncol = 2) +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.text.y = element_text(angle = 0),
+        text = element_text(size = 12),
+        rect = element_rect(fill = "white"))
+
+dev.off()
+
+
+# More things to add to the package development:
+# - testing
+# - include plot function
+# - write a wrap function with a choice parameter "prior"
+
+
+
+
+
+
+
+
